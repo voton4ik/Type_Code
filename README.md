@@ -49,7 +49,7 @@ copy .env.example .env
 
 На macOS/Linux: `cp .env.example .env`
 
-5. Вставьте ключ OpenRouter в `.env` (см. следующий раздел).
+5. Вставьте ключ OpenRouter в `.env`.
 
 6. Запуск dev-сервера (по умолчанию [http://localhost:5173](http://localhost:5173)):
 
@@ -70,7 +70,7 @@ npm run build
 1. Откройте [https://openrouter.ai/](https://openrouter.ai/) и войдите или зарегистрируйтесь.
 2. Перейдите в раздел ключей API (Keys) в панели аккаунта.
 3. Создайте новый ключ и скопируйте его.
-4. Вставьте ключ в файл `.env` в переменную `VITE_OPENROUTER_API_KEY` (без кавычек, в одну строку).
+4. Вставьте ключ в файл `.env` в переменную `VITE_OPENROUTER_API_KEY`.
 
 Подробности и лимиты бесплатных моделей смотрите в документации OpenRouter.
 
