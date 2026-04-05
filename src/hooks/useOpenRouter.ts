@@ -2,7 +2,15 @@ import { useCallback, useState } from "react";
 import type { CodeTopic, ProgrammingLanguage } from "../types";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "meta-llama/llama-4-scout:free";
+const DEFAULT_MODEL = "qwen/qwen3.6-plus:free";
+
+function resolveModel(): string {
+  const m = import.meta.env.VITE_OPENROUTER_MODEL;
+  if (typeof m === "string" && m.trim() !== "") {
+    return m.trim();
+  }
+  return DEFAULT_MODEL;
+}
 
 const topicPrompt: Record<CodeTopic, string> = {
   algorithms: "algorithms and data structures (sorting, search, simple DS)",
@@ -67,7 +75,7 @@ export function useOpenRouter() {
             "X-Title": "Code Typing Trainer",
           },
           body: JSON.stringify({
-            model: MODEL,
+            model: resolveModel(),
             messages: [
               {
                 role: "system",

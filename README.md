@@ -26,8 +26,8 @@
 
 - React 18, TypeScript, Vite 5
 - Tailwind CSS 3
-- Prism (через `prismjs` + тема `vsDark` из `prism-react-renderer`) для цвета токенов по символам
-- OpenRouter Chat Completions API, модель `meta-llama/llama-4-scout:free`
+- `prism-react-renderer` (`Highlight`, встроенный Prism с языками, тема `vsDark`) для подсветки по символам
+- OpenRouter Chat Completions API, по умолчанию модель `qwen/qwen3.6-plus:free` (переопределяется `VITE_OPENROUTER_MODEL`)
 
 Клиентское приложение без собственного бэкенда: запросы к OpenRouter идут из браузера (нужен ключ в `.env`).
 
@@ -79,6 +79,7 @@ npm run build
 | Переменная | Описание |
 |------------|----------|
 | `VITE_OPENROUTER_API_KEY` | Секретный ключ OpenRouter. Обязателен для генерации кода. Читается только через `import.meta.env` в Vite, в `localStorage` не сохраняется. |
+| `VITE_OPENROUTER_MODEL` | Id модели OpenRouter (например `qwen/qwen3.6-plus:free`). Если не задан, используется `qwen/qwen3.6-plus:free`. |
 
 Файл `.env` не коммитьте в репозиторий (он уже в `.gitignore`).
 
@@ -110,8 +111,7 @@ npm run build
 | `src/hooks/useOpenRouter.ts` | POST на `https://openrouter.ai/api/v1/chat/completions`, разбор ответа и ошибок для UI. |
 | `src/hooks/useTypingEngine.ts` | Состояние ввода, таймер, ошибки, завершение при полном совпадении. |
 | `src/utils/statsCalculator.ts` | Расчёт WPM, точности и итогового снимка статистики. |
-| `src/utils/prismLanguages.ts` | Подключение грамматик Prism и маппинг языка приложения на id Prism. |
-| `src/utils/prismCharStyles.ts` | Сопоставление каждого символа кода со стилем темы VS Dark. |
+| `src/utils/prismLanguages.ts` | Маппинг языка приложения на id грамматики из `Prism.languages` пакета `prism-react-renderer`. |
 | `src/types/index.ts` | Общие типы: язык, тема, снимки статистики. |
 | `.env.example` | Шаблон переменных окружения. |
 | `vite.config.ts` | Конфигурация Vite и плагина React. |
