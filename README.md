@@ -107,7 +107,7 @@ npm run build
 | `src/components/CodeTypingArea.tsx` | Подсветка по символам, цвета верно/ошибка/ожидание, оверлей-`textarea`, обработка Tab, скелетон при загрузке. |
 | `src/components/StatsPanel.tsx` | Панель WPM, точности, ошибок, времени. |
 | `src/components/SettingsPanel.tsx` | Выбор языка и темы, кнопка генерации. |
-| `src/components/ResultsModal.tsx` | Итоговая статистика и действия после упражнения. |
+| `src/components/ResultsSummary.tsx` | Блок итогов после успешного набора (WPM, точность, время в секундах, кнопки повтора). |
 | `src/hooks/useOpenRouter.ts` | POST на `https://openrouter.ai/api/v1/chat/completions`, разбор ответа и ошибок для UI. |
 | `src/hooks/useTypingEngine.ts` | Состояние ввода, таймер, ошибки, завершение при полном совпадении. |
 | `src/utils/statsCalculator.ts` | Расчёт WPM, точности и итогового снимка статистики. |

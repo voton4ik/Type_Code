@@ -7,16 +7,29 @@ import {
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef } from "react";
 import { getPrismLanguageId } from "../utils/prismLanguages";
-import type { ProgrammingLanguage } from "../types";
+import type { FontSize, ProgrammingLanguage } from "../types";
+
+const CODE_LINE_HEIGHT = 1.625;
 
 export interface CodeTypingAreaProps {
   targetText: string;
   userInput: string;
   language: ProgrammingLanguage;
-  onChange: (value: string) => void;
+  fontSize: FontSize;
+  onChange: (value: string, manualOverride?: number) => void;
   onKeyActivity: () => void;
   disabled: boolean;
   loading: boolean;
+}
+
+function expandTabFromTarget(target: string, pos: number): string {
+  if (pos < 0 || pos >= target.length) return "";
+  if (target[pos] === "\t") return "\t";
+  let n = 0;
+  while (pos + n < target.length && target[pos + n] === " ") {
+    n += 1;
+  }
+  return " ".repeat(n);
 }
 
 function renderStyledChar(
@@ -41,6 +54,11 @@ function renderStyledChar(
   }
   const mergedStyle: CSSProperties = { ...tp.style };
   if (ch === "\n") {
+    const arrowClass = !done
+      ? "text-zinc-500"
+      : correct
+        ? "text-emerald-400"
+        : "text-red-300";
     return (
       <span key={index}>
         <span
@@ -51,6 +69,9 @@ function renderStyledChar(
           style={mergedStyle}
         >
           {"\u00a0"}
+        </span>
+        <span className={`select-none text-xs font-normal ${arrowClass}`}>
+          ↵
         </span>
         {"\n"}
       </span>
@@ -74,6 +95,7 @@ export function CodeTypingArea({
   targetText,
   userInput,
   language,
+  fontSize,
   onChange,
   onKeyActivity,
   disabled,
@@ -93,23 +115,27 @@ export function CodeTypingArea({
         const el = e.currentTarget;
         const start = el.selectionStart;
         const end = el.selectionEnd;
-        const next =
-          userInput.slice(0, start) + "\t" + userInput.slice(end);
-        onChange(next);
+        const indent = expandTabFromTarget(targetText, start);
+        if (indent.length === 0) return;
+        const next = userInput.slice(0, start) + indent + userInput.slice(end);
+        onChange(next, 1);
         queueMicrotask(() => {
-          el.selectionStart = el.selectionEnd = start + 1;
+          const pos = start + indent.length;
+          el.selectionStart = el.selectionEnd = pos;
         });
       }
     },
-    [disabled, loading, onChange, onKeyActivity, userInput],
+    [disabled, loading, onChange, onKeyActivity, userInput, targetText],
   );
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       onKeyActivity();
-      onChange(e.target.value);
+      const v = e.target.value;
+      const delta = Math.max(0, v.length - userInput.length);
+      onChange(v, delta > 0 ? delta : undefined);
     },
-    [onChange, onKeyActivity],
+    [onChange, onKeyActivity, userInput],
   );
 
   useEffect(() => {
@@ -118,8 +144,14 @@ export function CodeTypingArea({
     }
   }, [disabled, loading, targetText]);
 
+  const monoBoxStyle: CSSProperties = {
+    fontSize: `${fontSize}px`,
+    lineHeight: CODE_LINE_HEIGHT,
+    tabSize: 4,
+  };
+
   return (
-    <div className="relative min-h-[220px] w-full rounded-lg border border-zinc-700 bg-zinc-950">
+    <div className="relative min-h-[300px] w-full overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950 [contain:layout]">
       {loading ? (
         <div className="space-y-3 p-4" aria-busy="true" aria-label="Загрузка">
           <div className="h-4 w-[92%] animate-pulse rounded bg-zinc-800" />
@@ -198,8 +230,12 @@ export function CodeTypingArea({
               }
               return (
                 <pre
-                  className={`${className} m-0 overflow-auto p-4 text-[15px] leading-relaxed`}
-                  style={{ ...style, background: "transparent" }}
+                  className={`${className} m-0 min-h-[260px] overflow-x-auto overflow-y-auto whitespace-pre p-4 font-mono`}
+                  style={{
+                    ...style,
+                    ...monoBoxStyle,
+                    background: "transparent",
+                  }}
                 >
                   <code className="font-mono">
                     {lineBlocks}
@@ -211,7 +247,8 @@ export function CodeTypingArea({
           </Highlight>
           <textarea
             ref={taRef}
-            className="absolute inset-0 z-10 cursor-default resize-none bg-transparent p-4 font-mono text-[15px] leading-relaxed text-transparent caret-transparent outline-none selection:bg-transparent"
+            className="absolute inset-0 z-10 cursor-default resize-none overflow-auto bg-transparent p-4 font-mono text-transparent caret-transparent outline-none selection:bg-transparent"
+            style={monoBoxStyle}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"

@@ -26,7 +26,9 @@ function buildUserMessage(lang: ProgrammingLanguage, topic: CodeTopic): string {
     `Language: ${lang}. Topic: ${topicLine}.`,
     "Return ONLY raw source code, 5 to 15 lines.",
     "No markdown fences, no backticks, no explanations, no comments outside the code if the language usually uses them sparingly.",
-    "Use typical idioms for the language. Include newlines between statements.",
+    "Use typical idioms for the language.",
+    "Every line must end with a newline character except the final line: do not add a trailing newline after the last line.",
+    "No blank lines between code lines unless syntactically required.",
   ].join(" ");
 }
 
@@ -80,7 +82,7 @@ export function useOpenRouter() {
               {
                 role: "system",
                 content:
-                  "You output only raw code. Never wrap in markdown. Never add prose. 5-15 lines.",
+                  "You output only raw code. Never wrap in markdown. Never add prose. 5-15 lines. Each line ends with newline except the last line has no trailing newline. No extra blank lines between lines.",
               },
               {
                 role: "user",
@@ -101,7 +103,7 @@ export function useOpenRouter() {
         }
 
         const text = extractAssistantText(raw);
-        const code = sanitizeModelCode(text);
+        const code = normalizeGeneratedCode(sanitizeModelCode(text));
 
         if (!code.trim()) {
           const msg = "Модель вернула пустой ответ. Попробуйте сгенерировать снова.";
@@ -173,4 +175,12 @@ function sanitizeModelCode(text: string): string {
     if (fence !== -1) s = s.slice(0, fence);
   }
   return s.replace(/\r\n/g, "\n").trim();
+}
+
+function normalizeGeneratedCode(code: string): string {
+  const lines = code.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  while (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines.join("\n");
 }
