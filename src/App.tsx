@@ -5,6 +5,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { StatsPanel } from "./components/StatsPanel";
 import { useOpenRouter } from "./hooks/useOpenRouter";
 import { useTypingEngine } from "./hooks/useTypingEngine";
+import { normalizeTargetText } from "./utils/targetText";
 import type {
   CodeTopic,
   FinalStats,
@@ -32,15 +33,10 @@ export default function App() {
     reset,
     applyInput,
     markStartedFromKey,
-    stopTest,
     phase,
     userInput,
     elapsedMs,
     timeLeft,
-    errorCount,
-    correctKeypresses,
-    totalKeypresses,
-    manualKeystrokes,
     isStarted,
   } = useTypingEngine({ targetText, timedMode, onFinished });
 
@@ -58,7 +54,7 @@ export default function App() {
     clearError();
     const out = await generateCode(language, topic);
     if (out.ok) {
-      setTargetText(out.code);
+      setTargetText(normalizeTargetText(out.code));
       setFinalStats(null);
     }
   }, [clearError, generateCode, language, topic]);
@@ -93,7 +89,8 @@ export default function App() {
   const settingsLocked = phase === "running" || phase === "finished";
   const typingDisabled =
     phase === "finished" || phase === "stopped" || loading;
-  const isTyping = isStarted && phase === "running";
+  const isRunning = isStarted && phase === "running";
+  const isFinished = phase === "finished";
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -129,23 +126,19 @@ export default function App() {
             {error}
           </div>
         ) : null}
-        <StatsPanel
-          elapsedMs={elapsedMs}
-          timeLeft={timeLeft}
-          timedMode={timedMode}
-          errorCount={errorCount}
-          correctKeypresses={correctKeypresses}
-          totalKeypresses={totalKeypresses}
-          manualKeystrokes={manualKeystrokes}
-          isStarted={isStarted}
-          isTyping={isTyping}
-        />
-        {phase === "running" ? (
-          <div className="flex justify-end">
+        {isRunning ? (
+          <div className="flex items-center justify-between gap-3">
+            <StatsPanel
+              elapsedMs={elapsedMs}
+              timeLeft={timeLeft}
+              timedMode={timedMode}
+              isStarted={isStarted}
+              isFinished={isFinished}
+            />
             <button
               type="button"
               className="rounded-md border border-amber-700/80 bg-amber-950/40 px-4 py-2 text-sm font-medium text-amber-100 hover:bg-amber-900/50"
-              onClick={stopTest}
+              onClick={reset}
             >
               Остановить
             </button>

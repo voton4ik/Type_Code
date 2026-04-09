@@ -29,7 +29,7 @@ export function buildFinalStats(
     codeLength,
     wpm:
       Math.round(
-        computeWpm(snapshot.manualKeystrokes, snapshot.elapsedMs) * 10,
+        computeWpm(snapshot.correctKeypresses, snapshot.elapsedMs) * 10,
       ) / 10,
     accuracyPercent: computeAccuracyPercent(
       snapshot.correctKeypresses,

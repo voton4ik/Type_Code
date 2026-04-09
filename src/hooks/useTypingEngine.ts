@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type {
   FinalStats,
   TimedMode,
@@ -6,6 +6,7 @@ import type {
   TypingStatsSnapshot,
 } from "../types";
 import { buildFinalStats, countWords } from "../utils/statsCalculator";
+import { normalizeTargetText } from "../utils/targetText";
 
 export interface UseTypingEngineOptions {
   targetText: string;
@@ -33,6 +34,37 @@ export interface UseTypingEngineResult {
   getSnapshot: () => TypingStatsSnapshot;
 }
 
+type EngineState = {
+  userInput: string;
+  phase: TypingPhase;
+  isStarted: boolean;
+  errorCount: number;
+  correctKeypresses: number;
+  totalKeypresses: number;
+  manualKeystrokes: number;
+  startTime: number | null;
+  endTime: number | null;
+};
+
+type EngineAction =
+  | { type: "RESET" }
+  | { type: "MARK_STARTED"; now: number }
+  | { type: "APPLY_INPUT"; nextRaw: string; manualOverride?: number; targetText: string; now: number }
+  | { type: "FINISH_TIMER"; now: number }
+  | { type: "STOP" };
+
+const initialState: EngineState = {
+  userInput: "",
+  phase: "idle",
+  isStarted: false,
+  errorCount: 0,
+  correctKeypresses: 0,
+  totalKeypresses: 0,
+  manualKeystrokes: 0,
+  startTime: null,
+  endTime: null,
+};
+
 function appendAutoIndentAfterNewline(tgt: string, next: string): string {
   if (!tgt.startsWith(next) || next.length === 0) return next;
   const last = next[next.length - 1];
@@ -45,11 +77,102 @@ function appendAutoIndentAfterNewline(tgt: string, next: string): string {
   return tgt.slice(0, j);
 }
 
-function prefixMatches(a: string, b: string, len: number): boolean {
-  for (let i = 0; i < len; i++) {
-    if (a[i] !== b[i]) return false;
+function isFullyMatchedInput(userInput: string, targetText: string): boolean {
+  return targetText.length > 0 && userInput.length >= targetText.length;
+}
+
+function engineReducer(state: EngineState, action: EngineAction): EngineState {
+  if (action.type === "RESET") {
+    return initialState;
   }
-  return true;
+
+  if (action.type === "MARK_STARTED") {
+    if (state.startTime !== null || state.phase === "finished" || state.phase === "stopped") {
+      return state;
+    }
+    return {
+      ...state,
+      isStarted: true,
+      phase: "running",
+      startTime: action.now,
+    };
+  }
+
+  if (action.type === "STOP") {
+    if (state.phase !== "running") return state;
+    return {
+      ...initialState,
+      phase: "stopped",
+    };
+  }
+
+  if (action.type === "FINISH_TIMER") {
+    if (state.phase !== "running" || state.startTime === null) return state;
+    return {
+      ...state,
+      phase: "finished",
+      endTime: action.now,
+    };
+  }
+
+  if (action.type === "APPLY_INPUT") {
+    if (state.phase === "finished" || state.phase === "stopped") return state;
+
+    const normalized = action.nextRaw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const rawClamped = normalized.slice(0, action.targetText.length);
+    const prev = state.userInput;
+
+    if (rawClamped.length < prev.length) {
+      return { ...state, userInput: rawClamped };
+    }
+    if (rawClamped === prev) return state;
+
+    let next = appendAutoIndentAfterNewline(action.targetText, rawClamped);
+    if (next.length > action.targetText.length) {
+      next = next.slice(0, action.targetText.length);
+    }
+    if (next === prev) return state;
+    const userGrowth = Math.max(0, next.length - prev.length);
+    const manualGrowth =
+      action.manualOverride !== undefined
+        ? Math.max(0, action.manualOverride)
+        : userGrowth;
+
+    const added = next.slice(prev.length);
+    let errs = 0;
+    let correct = 0;
+    for (let i = 0; i < added.length; i++) {
+      const ch = added[i];
+      if (!ch) continue;
+      const idx = prev.length + i;
+      const expected = action.targetText[idx];
+      if (expected === undefined) break;
+      if (ch === expected) correct += 1;
+      else errs += 1;
+    }
+
+    const startedNow = userGrowth > 0 && state.startTime === null;
+    const nextStartTime = startedNow ? action.now : state.startTime;
+    const nextPhase =
+      state.phase === "idle" && userGrowth > 0 ? "running" : state.phase;
+    const nextFinished = isFullyMatchedInput(next, action.targetText);
+
+    return {
+      ...state,
+      userInput: next,
+      phase: nextFinished ? "finished" : nextPhase,
+      isStarted: state.isStarted || userGrowth > 0,
+      errorCount: state.errorCount + errs,
+      correctKeypresses: state.correctKeypresses + correct,
+      totalKeypresses: state.totalKeypresses + added.length,
+      manualKeystrokes:
+        state.manualKeystrokes + (manualGrowth > 0 ? manualGrowth : 0),
+      startTime: nextStartTime,
+      endTime: nextFinished ? action.now : state.endTime,
+    };
+  }
+
+  return state;
 }
 
 export function useTypingEngine({
@@ -57,219 +180,96 @@ export function useTypingEngine({
   timedMode,
   onFinished,
 }: UseTypingEngineOptions): UseTypingEngineResult {
-  const [userInput, setUserInputState] = useState("");
-  const [phase, setPhase] = useState<TypingPhase>("idle");
-  const phaseRef = useRef(phase);
-  phaseRef.current = phase;
-  const [hasStarted, setHasStarted] = useState(false);
-  const [errorCount, setErrorCount] = useState(0);
-  const [correctKeypresses, setCorrectKeypresses] = useState(0);
-  const [totalKeypresses, setTotalKeypresses] = useState(0);
-  const [manualKeystrokes, setManualKeystrokes] = useState(0);
-
-  const startedAtRef = useRef<number | null>(null);
-  const endedAtRef = useRef<number | null>(null);
+  const normalizedTargetText = useMemo(
+    () => normalizeTargetText(targetText),
+    [targetText],
+  );
+  const [state, dispatch] = useReducer(engineReducer, initialState);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [tick, setTick] = useState(0);
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
+  const targetTextRef = useRef(normalizedTargetText);
+  targetTextRef.current = normalizedTargetText;
 
-  const targetRef = useRef(targetText);
-  targetRef.current = targetText;
-
-  const timedModeRef = useRef(timedMode);
-  timedModeRef.current = timedMode;
-
-  const timedDeadlineRef = useRef<number | null>(null);
-  const timeEndHandledRef = useRef(false);
-
-  const userInputRef = useRef("");
-  userInputRef.current = userInput;
-
-  const errorCountRef = useRef(0);
-  errorCountRef.current = errorCount;
-  const correctKeypressesRef = useRef(0);
-  correctKeypressesRef.current = correctKeypresses;
-  const totalKeypressesRef = useRef(0);
-  totalKeypressesRef.current = totalKeypresses;
-  const manualKeystrokesRef = useRef(0);
-  manualKeystrokesRef.current = manualKeystrokes;
-
-  useEffect(() => {
-    setUserInputState("");
-    setPhase("idle");
-    setHasStarted(false);
-    setErrorCount(0);
-    setCorrectKeypresses(0);
-    setTotalKeypresses(0);
-    setManualKeystrokes(0);
-    startedAtRef.current = null;
-    endedAtRef.current = null;
-    timedDeadlineRef.current = null;
-    timeEndHandledRef.current = false;
-  }, [targetText]);
-
-  const elapsedMs = useMemo(() => {
-    if (!startedAtRef.current) return 0;
-    const end = endedAtRef.current ?? Date.now();
-    return Math.max(0, end - startedAtRef.current);
-  }, [phase, tick, targetText, hasStarted]);
-
-  const finishDueToTimer = useCallback(() => {
-    if (phaseRef.current !== "running") return;
-    if (timeEndHandledRef.current) return;
-    timeEndHandledRef.current = true;
-    const start = startedAtRef.current;
-    const deadline = timedDeadlineRef.current;
-    const end =
-      deadline !== null ? Math.min(Date.now(), deadline) : Date.now();
-    endedAtRef.current = end;
-    setPhase("finished");
-    setTick((t) => t + 1);
-
-    const typed = userInputRef.current;
-    const tgt = targetRef.current;
-    const elapsed = start !== null ? Math.max(0, end - start) : 0;
+  const emitFinished = useCallback((nextState: EngineState) => {
+    if (nextState.phase !== "finished" || nextState.endTime === null) return;
+    const elapsed =
+      nextState.startTime !== null
+        ? Math.max(0, nextState.endTime - nextState.startTime)
+        : 0;
     const snap: TypingStatsSnapshot = {
       elapsedMs: elapsed,
-      typedChars: typed.length,
-      typedWordCount: countWords(typed),
-      errorCount: errorCountRef.current,
-      correctKeypresses: correctKeypressesRef.current,
-      totalKeypresses: totalKeypressesRef.current,
-      manualKeystrokes: manualKeystrokesRef.current,
+      typedChars: nextState.userInput.length,
+      typedWordCount: countWords(nextState.userInput),
+      errorCount: nextState.errorCount,
+      correctKeypresses: nextState.correctKeypresses,
+      totalKeypresses: nextState.totalKeypresses,
+      manualKeystrokes: nextState.manualKeystrokes,
     };
-    const fin = buildFinalStats(snap, tgt.length);
+    const fin = buildFinalStats(snap, targetTextRef.current.length);
     onFinishedRef.current?.(fin);
   }, []);
 
   useEffect(() => {
-    if (phase !== "running") return;
+    dispatch({ type: "RESET" });
+    stateRef.current = initialState;
+  }, [normalizedTargetText]);
+
+  const elapsedMs = useMemo(() => {
+    if (!state.startTime) return 0;
+    const end = state.endTime ?? Date.now();
+    return Math.max(0, end - state.startTime);
+  }, [state.startTime, state.endTime, tick]);
+
+  useEffect(() => {
+    if (state.phase !== "running") return;
     const id = window.setInterval(() => {
       setTick((t) => t + 1);
-      const mode = timedModeRef.current;
-      const deadline = timedDeadlineRef.current;
-      if (
-        mode !== null &&
-        deadline !== null &&
-        Date.now() >= deadline
-      ) {
-        finishDueToTimer();
+      if (timedMode !== null && state.startTime !== null) {
+        const deadline = state.startTime + timedMode * 1000;
+        if (Date.now() >= deadline) {
+          const action: EngineAction = {
+            type: "FINISH_TIMER",
+            now: deadline,
+          };
+          const prev = stateRef.current;
+          const next = engineReducer(prev, action);
+          stateRef.current = next;
+          dispatch(action);
+          if (prev.phase !== "finished" && next.phase === "finished") {
+            emitFinished(next);
+          }
+        }
       }
     }, 100);
     return () => window.clearInterval(id);
-  }, [phase, targetText, finishDueToTimer]);
+  }, [emitFinished, state.phase, state.startTime, timedMode]);
 
   const markStartedFromKey = useCallback(() => {
-    if (startedAtRef.current !== null) return;
-    startedAtRef.current = Date.now();
-    if (timedModeRef.current !== null) {
-      timedDeadlineRef.current =
-        startedAtRef.current + timedModeRef.current * 1000;
-    }
-    setHasStarted(true);
+    dispatch({ type: "MARK_STARTED", now: Date.now() });
     setTick((t) => t + 1);
   }, []);
 
   const applyInput = useCallback(
     (nextRaw: string, manualOverride?: number) => {
-      const tgt = targetRef.current;
-      const normalized = nextRaw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      const rawClamped = normalized.slice(0, tgt.length);
-      const prev = userInput;
-
-      if (phase === "finished" || phase === "stopped") return;
-
-      if (rawClamped.length < prev.length) {
-        setUserInputState(rawClamped);
-        return;
-      }
-
-      if (rawClamped === prev) return;
-
-      const userGrowth =
-        manualOverride !== undefined
-          ? Math.max(0, manualOverride)
-          : Math.max(0, rawClamped.length - prev.length);
-
-      let next = appendAutoIndentAfterNewline(tgt, rawClamped);
-      let overshoot = false;
-      if (next.length > tgt.length) {
-        overshoot = true;
-        next = next.slice(0, tgt.length);
-      }
-
-      if (next === prev) return;
-
-      if (userGrowth > 0) {
-        markStartedFromKey();
-      }
-      setPhase((p) => (p === "idle" ? "running" : p));
-
-      const added = next.slice(prev.length);
-      let errs = 0;
-      let correct = 0;
-
-      for (let i = 0; i < added.length; i++) {
-        const ch = added[i];
-        if (!ch) continue;
-        const idx = prev.length + i;
-        const expected = tgt[idx];
-        if (expected === undefined) break;
-        if (ch === expected) correct += 1;
-        else errs += 1;
-      }
-
-      if (errs > 0) setErrorCount((c) => c + errs);
-      if (correct > 0) setCorrectKeypresses((c) => c + correct);
-      if (added.length > 0) {
-        setTotalKeypresses((c) => c + added.length);
-      }
-      if (userGrowth > 0) {
-        setManualKeystrokes((c) => c + userGrowth);
-      }
-
-      setUserInputState(next);
-
-      const atEnd = tgt.length > 0 && next.length === tgt.length;
-      const allMatch =
-        atEnd && prefixMatches(next, tgt, tgt.length);
-      const shouldFinish = atEnd && (allMatch || overshoot);
-
-      if (shouldFinish) {
-        endedAtRef.current = Date.now();
-        setPhase("finished");
-        setTick((t) => t + 1);
-        const snapErr = errorCount + errs;
-        const snapCorr = correctKeypresses + correct;
-        const snapTot = totalKeypresses + added.length;
-        const snapManual = manualKeystrokes + (userGrowth > 0 ? userGrowth : 0);
-        const start = startedAtRef.current;
-        const elapsed =
-          start !== null
-            ? Math.max(0, endedAtRef.current - start)
-            : 0;
-        const snap: TypingStatsSnapshot = {
-          elapsedMs: elapsed,
-          typedChars: next.length,
-          typedWordCount: countWords(next),
-          errorCount: snapErr,
-          correctKeypresses: snapCorr,
-          totalKeypresses: snapTot,
-          manualKeystrokes: snapManual,
-        };
-        const fin = buildFinalStats(snap, tgt.length);
-        onFinishedRef.current?.(fin);
+      const action: EngineAction = {
+        type: "APPLY_INPUT",
+        nextRaw,
+        manualOverride,
+        targetText: targetTextRef.current,
+        now: Date.now(),
+      };
+      const prev = stateRef.current;
+      const next = engineReducer(prev, action);
+      stateRef.current = next;
+      dispatch(action);
+      if (prev.phase !== "finished" && next.phase === "finished") {
+        emitFinished(next);
       }
     },
-    [
-      userInput,
-      phase,
-      markStartedFromKey,
-      errorCount,
-      correctKeypresses,
-      totalKeypresses,
-      manualKeystrokes,
-    ],
+    [emitFinished],
   );
 
   const setUserInput = useCallback(
@@ -280,76 +280,56 @@ export function useTypingEngine({
   );
 
   const reset = useCallback(() => {
-    setUserInputState("");
-    setPhase("idle");
-    setHasStarted(false);
-    setErrorCount(0);
-    setCorrectKeypresses(0);
-    setTotalKeypresses(0);
-    setManualKeystrokes(0);
-    startedAtRef.current = null;
-    endedAtRef.current = null;
-    timedDeadlineRef.current = null;
-    timeEndHandledRef.current = false;
+    dispatch({ type: "RESET" });
+    stateRef.current = initialState;
     setTick((t) => t + 1);
   }, []);
 
   const stopTest = useCallback(() => {
-    if (phaseRef.current !== "running") return;
-    setUserInputState("");
-    setHasStarted(false);
-    setErrorCount(0);
-    setCorrectKeypresses(0);
-    setTotalKeypresses(0);
-    setManualKeystrokes(0);
-    startedAtRef.current = null;
-    endedAtRef.current = null;
-    timedDeadlineRef.current = null;
-    timeEndHandledRef.current = false;
-    setPhase("stopped");
+    dispatch({ type: "STOP" });
+    stateRef.current = engineReducer(stateRef.current, { type: "STOP" });
     setTick((t) => t + 1);
   }, []);
 
   const getSnapshot = useCallback((): TypingStatsSnapshot => {
-    const start = startedAtRef.current;
-    const end = endedAtRef.current ?? (start !== null ? Date.now() : null);
+    const start = state.startTime;
+    const end = state.endTime ?? (start !== null ? Date.now() : null);
     const elapsed =
       start !== null && end !== null ? Math.max(0, end - start) : 0;
-    const typed = userInputRef.current;
     return {
       elapsedMs: elapsed,
-      typedChars: typed.length,
-      typedWordCount: countWords(typed),
-      errorCount,
-      correctKeypresses,
-      totalKeypresses,
-      manualKeystrokes,
+      typedChars: state.userInput.length,
+      typedWordCount: countWords(state.userInput),
+      errorCount: state.errorCount,
+      correctKeypresses: state.correctKeypresses,
+      totalKeypresses: state.totalKeypresses,
+      manualKeystrokes: state.manualKeystrokes,
     };
-  }, [errorCount, correctKeypresses, totalKeypresses, manualKeystrokes]);
+  }, [state]);
 
   const timeLeft = useMemo(() => {
     if (timedMode === null) return null;
-    if (phase !== "running") return null;
-    const deadline = timedDeadlineRef.current;
-    if (deadline === null) return null;
+    if (state.phase !== "running") return null;
+    if (state.startTime === null) return null;
+    const deadline = state.startTime + timedMode * 1000;
     return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-  }, [timedMode, phase, tick]);
+  }, [timedMode, state.phase, state.startTime, tick]);
 
-  const isComplete = phase === "finished";
+  const isComplete = state.phase === "finished";
 
   return {
-    userInput,
+    userInput: state.userInput,
     setUserInput,
     applyInput,
-    phase,
+    phase: state.phase,
     isComplete,
-    isStarted: hasStarted,
+    isStarted: state.isStarted,
     elapsedMs,
     timeLeft,
-    errorCount,
-    correctKeypresses,
-    totalKeypresses,
-    manualKeystrokes,
+    errorCount: state.errorCount,
+    correctKeypresses: state.correctKeypresses,
+    totalKeypresses: state.totalKeypresses,
+    manualKeystrokes: state.manualKeystrokes,
     reset,
     stopTest,
     markStartedFromKey,

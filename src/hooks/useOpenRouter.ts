@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import type { CodeTopic, ProgrammingLanguage } from "../types";
+import { normalizeTargetText } from "../utils/targetText";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "qwen/qwen3.6-plus:free";
@@ -29,6 +30,7 @@ function buildUserMessage(lang: ProgrammingLanguage, topic: CodeTopic): string {
     "Use typical idioms for the language.",
     "Every line must end with a newline character except the final line: do not add a trailing newline after the last line.",
     "No blank lines between code lines unless syntactically required.",
+    "Output ONLY the code. First character of response must be first character of code. No text before or after the code block. 5-15 lines.",
   ].join(" ");
 }
 
@@ -78,11 +80,13 @@ export function useOpenRouter() {
           },
           body: JSON.stringify({
             model: resolveModel(),
+            max_tokens: 1000,
+            thinking: { type: "disabled" },
             messages: [
               {
                 role: "system",
                 content:
-                  "You output only raw code. Never wrap in markdown. Never add prose. 5-15 lines. Each line ends with newline except the last line has no trailing newline. No extra blank lines between lines.",
+                  "You are a code generator. Output ONLY raw source code. No thinking, no explanations, no markdown, no backticks, no comments about what you are doing, no preamble, no conclusion. Start your response with the first character of the first line of code. End your response with the last character of the last line of code. Absolutely nothing else.",
               },
               {
                 role: "user",
@@ -90,7 +94,6 @@ export function useOpenRouter() {
               },
             ],
             temperature: 0.6,
-            max_tokens: 1024,
           }),
         });
 
@@ -103,7 +106,7 @@ export function useOpenRouter() {
         }
 
         const text = extractAssistantText(raw);
-        const code = normalizeGeneratedCode(sanitizeModelCode(text));
+        const code = normalizeTargetText(extractCode(text));
 
         if (!code.trim()) {
           const msg = "Модель вернула пустой ответ. Попробуйте сгенерировать снова.";
@@ -166,21 +169,11 @@ function extractAssistantText(raw: unknown): string {
   return "";
 }
 
-function sanitizeModelCode(text: string): string {
-  let s = text.trim();
-  if (s.startsWith("```")) {
-    const firstNl = s.indexOf("\n");
-    s = firstNl === -1 ? "" : s.slice(firstNl + 1);
-    const fence = s.lastIndexOf("```");
-    if (fence !== -1) s = s.slice(0, fence);
+function extractCode(raw: string): string {
+  const fenced = raw.match(/```[\w]*\n?([\s\S]*?)```/);
+  if (fenced) {
+    return fenced[1].trim();
   }
-  return s.replace(/\r\n/g, "\n").trim();
+  return raw.trim();
 }
 
-function normalizeGeneratedCode(code: string): string {
-  const lines = code.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  while (lines.length > 0 && lines[lines.length - 1] === "") {
-    lines.pop();
-  }
-  return lines.join("\n");
-}
